@@ -73,7 +73,7 @@ function getUrlBase(url: normalizedUrl): normalizedUrl {
   url = url.substring(0, url.indexOf('#')) as normalizedUrl;
   // Normalization ensures we always have a trailing slash after a bare domain,
   // so this will always return with a trailing slash.
-  return url.substring(0, url.lastIndexOf('/' + 1)) as normalizedUrl;
+  return url.substring(0, url.lastIndexOf('/') + 1) as normalizedUrl;
 }
 
 /**
