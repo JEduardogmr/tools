@@ -1,4 +1,22 @@
+type modCallback = (...args: {}[]) => void;
+
+interface Window {
+  define: (deps: string[], factory: modCallback) => void;
+}
+
 (function() {
+
+interface Module {
+  url: normalizedUrl;
+  urlBase: normalizedUrl;
+  exports: {[id: string]: {}};
+  /** This module hasn't started loading its script yet. */
+  needsLoad: boolean;
+  /** All dependencies are resolved and the factory has run. */
+  resolved: boolean;
+  /** Callbacks from dependents waiting for this module to resolve. */
+  notify: Array<() => void>;
+}
 
 /**
  * A global map from a fully qualified module URLs to module objects.
@@ -9,17 +27,24 @@ const registry: {[url: string]: Module} = Object.create(null);
  * Return a module object from the registry for the given URL, creating one if
  * it doesn't exist yet.
  */
-function getModule(url: string): Module {
+function getModule(url: normalizedUrl): Module {
   let mod = registry[url];
   if (mod === undefined) {
-    mod = registry[url] = new Module(url);
+    mod = registry[url] = {
+      url,
+      urlBase: getUrlBase(url),
+      exports: Object.create(null),
+      resolved: false,
+      needsLoad: true,
+      notify: [],
+    };
   }
   return mod;
 }
 
-const anchor = document.createElement('a');
-
 type normalizedUrl = string&{_normalized: never};
+
+const anchor = document.createElement('a');
 
 /**
  * Use the browser to resolve a URL to its canonical format.
@@ -41,9 +66,9 @@ function normalizeUrl(url: string): normalizedUrl {
  *  - http://example.com/ => http://example.com/
  *  - http://example.com/foo.js => http://example.com/
  *  - http://example.com/foo/ => http://example.com/foo/
- *  - http://example.com/foo/?query#frag => http://example.com/foo/
+ *  - http://example.com/foo/?qu/ery#fr/ag => http://example.com/foo/
  */
-function getBasePath(url: normalizedUrl): normalizedUrl {
+function getUrlBase(url: normalizedUrl): normalizedUrl {
   url = url.substring(0, url.indexOf('?')) as normalizedUrl;
   url = url.substring(0, url.indexOf('#')) as normalizedUrl;
   // Normalization ensures we always have a trailing slash after a bare domain,
@@ -51,135 +76,114 @@ function getBasePath(url: normalizedUrl): normalizedUrl {
   return url.substring(0, url.lastIndexOf('/' + 1)) as normalizedUrl;
 }
 
-let pendingDefine: ((mod: Module) => void)|undefined = undefined;
-
-class Module {
-  private url: normalizedUrl;
-  private urlBase: string;
-  private exports: {[id: string]: {}} = {};
-
-  /** All dependencies are resolved and the factory has run. */
-  private resolved = false;
-
-  /** Callbacks from dependents waiting for this module to resolve. */
-  private notify: Array<() => void> = [];
-
-  public needsLoad = true;
-
-  constructor(url: string) {
-    this.url = normalizeUrl(url);
-    this.urlBase = getBasePath(this.url);
+/**
+ * Resolve a URL relative to a normalized base URL.
+ */
+function resolveUrl(urlBase: normalizedUrl, url: string): normalizedUrl {
+  if (url.indexOf('://') !== -1) {
+    // Already a fully qualified URL.
+    return url as normalizedUrl;
   }
+  return normalizeUrl(urlBase + url);
+}
 
-  /**
-   * Initialize this module with its dependencies and factory function. Note
-   * that Module objects are created and registered before they are loaded,
-   * which is why this is not simply part of construction.
-   */
-  define(deps: string[], factory?: (...args: {}[]) => void) {
-    const mod = this;
-    this.require(deps, function(...args: {}[]) {
-      if (factory !== undefined) {
-        factory.apply(null, args);
-      }
-      mod.resolved = true;
-      for (const callback of mod.notify) {
-        callback();
-      }
-    });
-  }
-
-  /**
-   * Execute the given callback after all dependencies are resolved.
-   */
-  require(deps: string[], callback?: (...args: {}[]) => void) {
-    const args: {}[] = [];
-    let numUnresolvedDeps = 0;
-
-    function onDepResolved() {
-      numUnresolvedDeps--;
-      checkDeps();
+/**
+ * Initialize a module with its dependencies and factory function. Note that
+ * Module objects are created and registered before they are loaded, which is
+ * why this is not simply part of creation.
+ */
+function define(mod: Module, deps: string[], factory?: modCallback) {
+  require(mod, deps, function(...args: {}[]) {
+    if (factory !== undefined) {
+      factory.apply(null, args);
     }
-
-    function checkDeps() {
-      if (numUnresolvedDeps === 0) {
-        if (callback !== undefined) {
-          callback.apply(null, args);
-        }
-      }
+    mod.resolved = true;
+    for (const callback of mod.notify) {
+      callback();
     }
+  });
+}
 
-    for (let i = 0; i < deps.length; i++) {
-      const depSpec = deps[i];
+/**
+ * Execute the given callback after all module dependencies are resolved.
+ */
+function require(mod: Module, deps: string[], callback?: modCallback) {
+  const args: {}[] = [];
+  let numUnresolvedDeps = 0;
 
-      if (depSpec === 'exports') {
-        args[i] = this.exports;
-
-      } else if (depSpec === 'require') {
-        args[i] = this.require.bind(this);
-
-      } else if (depSpec === 'meta') {
-        // TODO(aomarks) Possibly replace with
-        args[i] = {url: this.url};
-
-      } else {
-        const depMod = getModule(this.resolveUrl(depSpec));
-        args[i] = depMod.exports;
-
-        if (depMod.resolved === false) {
-          numUnresolvedDeps++;
-          depMod.notify.push(onDepResolved);
-          depMod.loadIfNeeded();
-        }
-      }
-    }
-
+  function onDepResolved() {
+    numUnresolvedDeps--;
     checkDeps();
   }
 
-  /**
-   * Resolve a URL relative to the URL of this module.
-   */
-  private resolveUrl(url: string) {
-    if (url.indexOf('://') !== -1) {
-      // Already a fully qualified URL.
-      return url;
-    }
-    return normalizeUrl(this.urlBase + url);
-  }
-
-  /**
-   * Load this module by creating a <script> tag in the document <head>, unless
-   * we have already started (or didn't need to, as in the case of top-level
-   * scripts).
-   */
-  private loadIfNeeded() {
-    if (this.needsLoad === false) {
-      return;
-    }
-    this.needsLoad = true;
-
-    const script = document.createElement('script');
-    script.src = this.url;
-
-    const mod = this;
-    script.onload = function() {
-      if (pendingDefine !== undefined) {
-        pendingDefine(mod);
-      } else {
-        // The script did not make a call to define(), otherwise the global
-        // callback would have been set. That's fine, we can resolve immediately
-        // because we don't have any dependencies, by definition.
-        mod.define([]);
+  function checkDeps() {
+    if (numUnresolvedDeps === 0) {
+      if (callback !== undefined) {
+        callback.apply(null, args);
       }
-    };
-
-    script.onerror = function() {
-      throw new Error('error loading module ' + mod.url);
-    };
-
-    document.head.appendChild(script);
+    }
   }
+
+  for (let i = 0; i < deps.length; i++) {
+    const depSpec = deps[i];
+
+    if (depSpec === 'exports') {
+      args[i] = mod.exports;
+
+    } else if (depSpec === 'require') {
+      args[i] = (deps: string[], callback: modCallback) =>
+          require(mod, deps, callback);
+
+    } else if (depSpec === 'meta') {
+      args[i] = {url: mod.url};
+
+    } else {
+      const depMod = getModule(resolveUrl(mod.urlBase, depSpec));
+      args[i] = depMod.exports;
+
+      if (depMod.resolved === false) {
+        numUnresolvedDeps++;
+        depMod.notify.push(onDepResolved);
+        loadIfNeeded(mod);
+      }
+    }
+  }
+
+  checkDeps();
+}
+
+let pendingDefine: ((mod: Module) => void)|undefined = undefined;
+
+/**
+ * Load a module by creating a <script> tag in the document <head>, unless we
+ * have already started (or didn't need to, as in the case of top-level
+ * scripts).
+ */
+function loadIfNeeded(mod: Module) {
+  if (mod.needsLoad === true) {
+    return;
+  }
+  mod.needsLoad = false;
+
+  const script = document.createElement('script');
+  script.src = mod.url;
+
+  script.onload = () => {
+    if (pendingDefine !== undefined) {
+      pendingDefine(mod);
+    } else {
+      // The script did not make a call to define(), otherwise the global
+      // callback would have been set. That's fine, we can resolve immediately
+      // because we don't have any dependencies, by definition.
+      define(mod, []);
+    }
+  };
+
+  script.onerror = () => {
+    throw new Error('error loading module ' + mod.url);
+  };
+
+  document.head.appendChild(script);
 }
 
 let topLevelScriptIdx = 0;
@@ -192,7 +196,7 @@ let previousTopLevelUrl: string|undefined = undefined;
  * Dependencies must be specified as URLs, either relative or fully qualified
  * (e.g. "../foo.js" or "http://example.com/bar.js" but not "my-module-name").
  */
-window.define = function(deps: string[], factory?: (...args: {}[]) => void) {
+window.define = function(deps: string[], factory?: modCallback) {
   // We don't yet know our own module URL. We need to discover it so that we
   // can resolve our relative dependency specifiers. There are two ways the
   // script executing this define() call could have been loaded:
@@ -204,19 +208,19 @@ window.define = function(deps: string[], factory?: (...args: {}[]) => void) {
   // fired by this <script>, which will be handled by the loading script,
   // which will invoke the callback with our module object.
   let defined = false;
-  pendingDefine = function(mod) {
+  pendingDefine = (mod) => {
     defined = true;
     pendingDefine = undefined;
-    mod.define(deps, factory);
+    define(mod, deps, factory);
   };
 
   // Case #2: We are a top-level script in the HTML document. Our URL is the
   // document's base URL. We can discover this case by waiting a tick, and if
   // we haven't already been defined by the "onload" handler from case #1,
   // then this must be case #2.
-  setTimeout(function() {
+  setTimeout(() => {
     if (defined === false) {
-      const url = document.baseURI + '#' + topLevelScriptIdx++;
+      const url = document.baseURI + '#' + topLevelScriptIdx++ as normalizedUrl;
       const mod = getModule(url);
 
       // Top-level scripts are already loaded.
@@ -231,12 +235,8 @@ window.define = function(deps: string[], factory?: (...args: {}[]) => void) {
         deps.push(previousTopLevelUrl);
       }
       previousTopLevelUrl = url;
-      mod.define(deps, factory);
+      define(mod, deps, factory);
     }
   }, 0);
 };
 })();
-
-interface Window {
-  define: (deps: string[], factory: (...args: {}[]) => void) => void;
-}
