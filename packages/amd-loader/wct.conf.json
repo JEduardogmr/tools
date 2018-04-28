@@ -1,1 +1,7 @@
-{ "moduleResolution": true, "npm": true, "suites": ["test/**/*.html"] }
+{
+  "npm": true,
+  "moduleResolution": "node",
+  "suites": [
+    "test/**/*.html"
+  ]
+}
