@@ -9,6 +9,7 @@ const define = window.define;
 // ├── x.js (module with no dependencies)
 // └── y
 //     ├── suite.html (base HTML document)
+//     ├── suite.min.html (same as suite.html but uses minified amd-loader)
 //     ├── y.js (module with no dependencies)
 //     ├── no-define.js (module which does not call define)
 //     └── z
@@ -100,7 +101,8 @@ suite('meta.url', () => {
     define(['./z/exports-meta.js'], (exportsMeta: any) => {
       assert.equal(
           exportsMeta.meta.url,
-          document.baseURI!.split('/suite.html')[0] + '/z/exports-meta.js');
+          document.baseURI!.split(/\/suite[^/]*\.html/)[0] +
+              '/z/exports-meta.js');
       done();
     });
   });
