@@ -132,7 +132,7 @@ export class JsTransform extends GenericOptimizeTransform {
       }
 
       return jsTransform(content, {
-        compileToEs5: shouldCompileFile(file),
+        compile: shouldCompileFile(file),
         externalHelpers: true,
         minify: shouldMinifyFile(file),
         moduleResolution: jsOptions.moduleResolution,

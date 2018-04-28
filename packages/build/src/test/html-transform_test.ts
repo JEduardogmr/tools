@@ -80,7 +80,7 @@ suite('htmlTransform', () => {
       </body></html>`;
 
     assertEqualIgnoringWhitespace(
-        htmlTransform(input, {js: {compileToEs5: true}}), expected);
+        htmlTransform(input, {js: {compile: true}}), expected);
   });
 
   test('minifies inline JavaScript', () => {
@@ -275,7 +275,7 @@ suite('htmlTransform', () => {
       assertEqualIgnoringWhitespace(
           htmlTransform(input, {
             js: {
-              compileToEs5: true,
+              compile: true,
               transformModulesToAmd: true,
             }
           }),
